@@ -1,21 +1,21 @@
-name: Build and Release
+name: Update Formula
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Force a specific version (e.g. 0.2.8). Leave empty to auto-detect from npm.'
+        description: 'Force a specific version (e.g. 0.2.1). Leave empty to auto-detect.'
         required: false
   schedule:
-    - cron: '0 * * * *'  # check npm every hour
+    - cron: '0 * * * *'  # check every hour
 
 jobs:
-  check:
+  update:
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.resolve.outputs.version }}
-      skip: ${{ steps.resolve.outputs.skip }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Resolve version
         id: resolve
         env:
@@ -24,104 +24,47 @@ jobs:
           if [ -n "${{ github.event.inputs.version }}" ]; then
             VERSION="${{ github.event.inputs.version }}"
           else
-            VERSION=$(curl -sf https://registry.npmjs.org/@happier-dev/cli/latest | jq -r '.version')
+            VERSION=$(curl -sf https://api.github.com/repos/happier-dev/happier/releases \
+              | jq -r '[.[] | select(.tag_name | startswith("cli-v"))] | first | .tag_name | ltrimstr("cli-v")')
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-          # Skip if a release for this version already exists
-          if gh release view "v${VERSION}" --repo "${{ github.repository }}" &>/dev/null; then
+          CURRENT=$(grep '^\s*version ' Formula/happier.rb | grep -o '[0-9.]*')
+          if [ "$CURRENT" = "$VERSION" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "v${VERSION} already released, skipping."
+            echo "Already at v${VERSION}, skipping."
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "Will build v${VERSION}"
+            echo "Updating from v${CURRENT} to v${VERSION}"
           fi
 
-  build:
-    needs: check
-    if: needs.check.outputs.skip == 'false'
-    runs-on: macos-latest
-    env:
-      VERSION: ${{ needs.check.outputs.version }}
-    steps:
-      - name: Checkout tap repo
-        uses: actions/checkout@v4
-
-      - name: Checkout happier source
-        uses: actions/checkout@v4
-        with:
-          repository: happier-dev/happier
-          token: ${{ secrets.HAPPIER_REPO_TOKEN }}
-          path: happier-src
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Setup Node (for yarn)
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Build binaries
-        run: bash scripts/build-cli.sh happier-src dist
-
-      - name: Compute checksums
+      - name: Fetch checksums
+        if: steps.resolve.outputs.skip == 'false'
         id: checksums
         run: |
-          ARM64_SHA=$(shasum -a 256 dist/happier-darwin-arm64 | awk '{print $1}')
-          X64_SHA=$(shasum -a 256 dist/happier-darwin-x64 | awk '{print $1}')
-          echo "arm64_sha=$ARM64_SHA" >> "$GITHUB_OUTPUT"
-          echo "x64_sha=$X64_SHA" >> "$GITHUB_OUTPUT"
+          VERSION="${{ steps.resolve.outputs.version }}"
+          BASE="https://github.com/happier-dev/happier/releases/download/cli-v${VERSION}"
+          SUMS=$(curl -sf "${BASE}/checksums-happier-v${VERSION}.txt")
+          ARM64=$(echo "$SUMS" | awk '/darwin-arm64/ {print $1}')
+          X64=$(echo "$SUMS"   | awk '/darwin-x64/   {print $1}')
+          echo "arm64=$ARM64" >> "$GITHUB_OUTPUT"
+          echo "x64=$X64"     >> "$GITHUB_OUTPUT"
 
-      - name: Create GitHub release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Update formula
+        if: steps.resolve.outputs.skip == 'false'
         run: |
-          gh release create "v${VERSION}" \
-            --title "v${VERSION}" \
-            --notes "Automated build of @happier-dev/cli v${VERSION}" \
-            dist/happier-darwin-arm64 \
-            dist/happier-darwin-x64
+          VERSION="${{ steps.resolve.outputs.version }}"
+          ARM64="${{ steps.checksums.outputs.arm64 }}"
+          X64="${{ steps.checksums.outputs.x64 }}"
+          sed -i "s/version \".*\"/version \"${VERSION}\"/" Formula/happier.rb
+          sed -i "s|sha256 \"[a-f0-9]*\"  # arm64|sha256 \"${ARM64}\"  # arm64|" Formula/happier.rb
+          sed -i "s|sha256 \"[a-f0-9]*\"  # x64|sha256 \"${X64}\"  # x64|" Formula/happier.rb
 
-      - name: Update cask
-        run: |
-          REPO="${{ github.repository }}"
-          ARM64_URL="https://github.com/${REPO}/releases/download/v${VERSION}/happier-darwin-arm64"
-          X64_URL="https://github.com/${REPO}/releases/download/v${VERSION}/happier-darwin-x64"
-          ARM64_SHA="${{ steps.checksums.outputs.arm64_sha }}"
-          X64_SHA="${{ steps.checksums.outputs.x64_sha }}"
-
-          cat > Casks/happier.rb << EOF
-          cask "happier" do
-            version "${VERSION}"
-
-            on_arm do
-              url "${ARM64_URL}"
-              sha256 "${ARM64_SHA}"
-            end
-
-            on_intel do
-              url "${X64_URL}"
-              sha256 "${X64_SHA}"
-            end
-
-            desc "Mobile and Web client for Claude Code and Codex"
-            homepage "https://github.com/happier-dev/happier"
-
-            binary "happier-darwin-arm64", target: "happier" if Hardware::CPU.arm?
-            binary "happier-darwin-x64",   target: "happier" if Hardware::CPU.intel?
-
-            zap trash: [
-              "~/.happier",
-              "~/.config/happier",
-            ]
-          end
-          EOF
-
-      - name: Commit updated cask
+      - name: Commit and push
+        if: steps.resolve.outputs.skip == 'false'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Casks/happier.rb
-          git commit -m "Release v${VERSION}"
+          git add Formula/happier.rb
+          git commit -m "Update happier to v${{ steps.resolve.outputs.version }}"
           git push

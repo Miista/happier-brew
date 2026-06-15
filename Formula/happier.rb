@@ -1,29 +1,27 @@
 class Happier < Formula
   desc "Mobile and Web client for Claude Code and Codex"
-  homepage "https://www.npmjs.com/package/@happier-dev/cli"
-  url "https://registry.npmjs.org/@happier-dev/cli/-/cli-0.2.1.tgz"
-  sha256 "736c04e15fa95edffa9a7a8a9300fd01dcf0af9b6fd68f2d630d8cbbb6479120"
-  license "MIT"
+  homepage "https://github.com/happier-dev/happier"
   version "0.2.1"
+  license "MIT"
 
-  depends_on "node"
+  on_macos do
+    on_arm do
+      url "https://github.com/happier-dev/happier/releases/download/cli-v#{version}/happier-v#{version}-darwin-arm64.tar.gz"
+      sha256 "49be2e4079c4cec9b4e22a703ff3da54c1d0a53af8a6b0649ede019f5fbf7ec8" # arm64
+    end
 
-  def install
-    libexec.install Dir["*"]
-
-    %w[
-      happier
-      happier-dev
-      happier-mcp
-      happier-mcp-remote-bridge
-      happier-mcp-stdio-launcher
-    ].each do |cmd|
-      (bin/cmd).write_env_script libexec/"bin/#{cmd}.mjs",
-        PATH: "#{Formula["node"].opt_bin}:$PATH"
+    on_intel do
+      url "https://github.com/happier-dev/happier/releases/download/cli-v#{version}/happier-v#{version}-darwin-x64.tar.gz"
+      sha256 "ca668ab55698ba93d39971eb4f2bb3277e1feb69249a7957132b65251e427d4e" # x64
     end
   end
 
+  def install
+    libexec.install Dir["*"]
+    bin.install_symlink libexec/"happier"
+  end
+
   test do
-    assert_match version.to_s, shell_output("#{bin}/happier --version 2>&1", 1)
+    assert_match version.to_s, shell_output("#{bin}/happier --version 2>&1")
   end
 end
