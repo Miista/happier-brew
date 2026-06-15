@@ -25,7 +25,7 @@ jobs:
             VERSION="${{ github.event.inputs.version }}"
           else
             VERSION=$(curl -sf https://api.github.com/repos/happier-dev/happier/releases \
-              | jq -r '[.[] | select(.tag_name | startswith("cli-v"))] | first | .tag_name | ltrimstr("cli-v")')
+              | jq -r '[.[] | select(.tag_name | startswith("cli-v")) | select(.prerelease == false)] | first | .tag_name | ltrimstr("cli-v")')
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
