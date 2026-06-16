@@ -31,7 +31,7 @@ class Happier < Formula
   end
 
   def install
-    libexec.install Dir["happier-v#{version}-*/*"]
+    libexec.install Dir["*"]
     bin.install_symlink libexec/"happier"
   end
 
