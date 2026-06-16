@@ -3,8 +3,12 @@ name: Update Formula
 on:
   workflow_dispatch:
     inputs:
+      channel:
+        description: 'Channel to update (latest, next, dev, or all)'
+        required: false
+        default: 'all'
       version:
-        description: 'Force a specific version (e.g. 0.2.1). Leave empty to auto-detect.'
+        description: 'Force a specific version (only valid when channel is a single channel)'
         required: false
   schedule:
     - cron: '0 * * * *'  # check every hour
@@ -12,33 +16,52 @@ on:
 jobs:
   update:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - channel: latest
+            npm_tag: latest
+            formula: Formula/happier.rb
+          - channel: next
+            npm_tag: next
+            formula: Formula/happier@next.rb
+          - channel: dev
+            npm_tag: dev
+            formula: Formula/happier@dev.rb
     steps:
+      - name: Skip non-matching channel
+        if: github.event.inputs.channel != '' && github.event.inputs.channel != 'all' && github.event.inputs.channel != matrix.channel
+        run: |
+          echo "Skipping ${{ matrix.channel }} (input requested ${{ github.event.inputs.channel }})"
+          echo "SKIP=true" >> "$GITHUB_ENV"
+
       - name: Checkout
+        if: env.SKIP != 'true'
         uses: actions/checkout@v4
 
       - name: Resolve version
+        if: env.SKIP != 'true'
         id: resolve
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
+          if [ -n "${{ github.event.inputs.version }}" ] && [ "${{ github.event.inputs.channel }}" = "${{ matrix.channel }}" ]; then
             VERSION="${{ github.event.inputs.version }}"
           else
-            VERSION=$(curl -sf https://registry.npmjs.org/@happier-dev/cli/latest | jq -r '.version')
+            VERSION=$(curl -sf "https://registry.npmjs.org/@happier-dev/cli" | jq -r '."dist-tags"."${{ matrix.npm_tag }}"')
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-          CURRENT=$(grep '^\s*version ' Formula/happier.rb | grep -o '[0-9.]*')
+          CURRENT=$(grep '^\s*version ' "${{ matrix.formula }}" | sed -E 's/.*"([^"]+)".*/\1/')
           if [ "$CURRENT" = "$VERSION" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Already at v${VERSION}, skipping."
+            echo "${{ matrix.channel }}: already at v${VERSION}, skipping."
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "Updating from v${CURRENT} to v${VERSION}"
+            echo "${{ matrix.channel }}: updating from v${CURRENT} to v${VERSION}"
           fi
 
       - name: Fetch checksums
-        if: steps.resolve.outputs.skip == 'false'
+        if: env.SKIP != 'true' && steps.resolve.outputs.skip == 'false'
         id: checksums
         run: |
           VERSION="${{ steps.resolve.outputs.version }}"
@@ -54,14 +77,15 @@ jobs:
           echo "linux_x64=$LINUX_X64"       >> "$GITHUB_OUTPUT"
 
       - name: Update formula
-        if: steps.resolve.outputs.skip == 'false'
+        if: env.SKIP != 'true' && steps.resolve.outputs.skip == 'false'
         run: |
           VERSION="${{ steps.resolve.outputs.version }}"
+          FORMULA="${{ matrix.formula }}"
           python3 - <<EOF
-          import re, pathlib
-          p = pathlib.Path("Formula/happier.rb")
+          import re, pathlib, os
+          p = pathlib.Path("${FORMULA}")
           s = p.read_text()
-          s = re.sub(r'version "[^"]+"', 'version "${VERSION}"', s, count=1)
+          s = re.sub(r'version "[^"]+"', f'version "${VERSION}"', s, count=1)
           sums = {
             "darwin-arm64": "${{ steps.checksums.outputs.darwin_arm64 }}",
             "darwin-x64":   "${{ steps.checksums.outputs.darwin_x64 }}",
@@ -78,10 +102,11 @@ jobs:
           EOF
 
       - name: Commit and push
-        if: steps.resolve.outputs.skip == 'false'
+        if: env.SKIP != 'true' && steps.resolve.outputs.skip == 'false'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/happier.rb
-          git commit -m "Update happier to v${{ steps.resolve.outputs.version }}"
+          git pull --rebase
+          git add "${{ matrix.formula }}"
+          git commit -m "Update happier (${{ matrix.channel }}) to v${{ steps.resolve.outputs.version }}"
           git push

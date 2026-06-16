@@ -5,6 +5,8 @@ class HappierATNext < Formula
 
   conflicts_with "happier",
     because: "both install the `happier` binary"
+  conflicts_with "happier@dev",
+    because: "both install the `happier` binary"
 
   on_macos do
     on_arm do
