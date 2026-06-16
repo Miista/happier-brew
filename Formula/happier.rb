@@ -26,7 +26,8 @@ class Happier < Formula
   end
 
   def install
-    bin.install Dir["*/happier"].first => "happier"
+    libexec.install Dir["happier-v#{version}-*/*"]
+    bin.install_symlink libexec/"happier"
   end
 
   test do
