@@ -33,7 +33,7 @@ class Happier < Formula
   def install
     libexec.install Dir["*"]
     bin.install_symlink libexec/"happier"
-    system "xattr", "-dr", "com.apple.quarantine", prefix if OS.mac?
+    system "xattr", "-drs", "com.apple.quarantine", prefix if OS.mac?
   end
 
   test do
